@@ -1,0 +1,50 @@
+10:12:36 [INFO] Starting IncidentOps consumer worker…
+10:12:37 [INFO] Connected to Redis at redis://localhost:6379
+10:12:37 [INFO] Connected to Postgres at postgresql://user:password@localhost:5433/incidentops
+10:12:37 [INFO] Consumer group 'incident-workers' already exists – resuming.
+10:12:37 [INFO] Baseline refresh: 7 sources updated. {'ingress-nginx': '236ms', 'payment-gateway': '296ms', 'notification-worker': '100ms', 'user-profile': '239ms', 'api-gateway-01': '177ms', 'auth-service': '955ms', 'test': '100ms'}
+10:12:37 [INFO] Checking for pending (unacked) messages from prior runs…
+10:12:37 [INFO] Entering main consume loop (Ctrl-C to stop)…
+[INCIDENT CREATED] #8 latency_spike api-gateway-01  527.0 vs 353.41
+
+==================================================================================
+  ROLLING WINDOW SUMMARY  (10:12:48)  window=60s  burst=30s
+Source                          Total    Err%    AvgRT  Burst   Baseline
+----------------------------------------------------------------------------------
+  api-gateway-01                    1    0.0%   527ms   0 err     177ms  <-- LAT
+  database-cluster-primary          1  100.0%     N/A   1 err       N/A
+  notification-worker               1    0.0%     N/A   0 err     100ms
+  user-profile                      3    0.0%    89ms   0 err     239ms
+==================================================================================
+10:12:50 [INFO] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+10:12:50 [INFO] Generated AI summary for incident #8
+
+==================================================================================
+  ROLLING WINDOW SUMMARY  (10:12:58)  window=60s  burst=30s
+Source                          Total    Err%    AvgRT  Burst   Baseline
+----------------------------------------------------------------------------------
+  api-gateway-01                    2    0.0%   304ms   0 err     177ms
+  auth-service                      4    0.0%   210ms   0 err     955ms
+  database-cluster-primary          2   50.0%     N/A   1 err       N/A
+  ingress-nginx                     1    0.0%    28ms   0 err     236ms
+  notification-worker               3    0.0%     N/A   0 err     100ms
+  user-profile                      4    0.0%    91ms   0 err     239ms
+==================================================================================
+[INCIDENT CREATED] #9 latency_spike payment-gateway  1142.0 vs 592.0
+10:13:06 [INFO] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+10:13:06 [INFO] Generated AI summary for incident #9
+[INCIDENT UPDATED] #7 failure_burst notification-worker  5.0 vs 5.0 (was 6.0)
+
+==================================================================================
+  ROLLING WINDOW SUMMARY  (10:13:08)  window=60s  burst=30s
+Source                          Total    Err%    AvgRT  Burst   Baseline
+----------------------------------------------------------------------------------
+  api-gateway-01                    2    0.0%   304ms   0 err     177ms
+  auth-service                      6    0.0%   228ms   0 err     955ms
+  database-cluster-primary          3   33.3%     N/A   1 err       N/A
+  ingress-nginx                     1    0.0%    28ms   0 err     236ms
+  notification-worker               8   62.5%   100ms   5 err     100ms  <-- BURST
+  payment-gateway                   2   50.0%  1142ms   1 err     296ms  <-- LAT
+  user-profile                      5    0.0%    90ms   0 err     239ms
+==================================================================================
+[INCIDENT UPDATED] #7 failure_burst notification-worker  6.0 vs 5.0 (was 5.0)

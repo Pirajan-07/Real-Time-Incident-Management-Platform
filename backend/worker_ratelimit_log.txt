@@ -1,0 +1,56 @@
+10:15:09 [INFO] Starting IncidentOps consumer worker…
+10:15:09 [INFO] Connected to Redis at redis://localhost:6379
+10:15:09 [INFO] Connected to Postgres at postgresql://user:password@localhost:5433/incidentops
+10:15:09 [INFO] Consumer group 'incident-workers' already exists – resuming.
+10:15:09 [INFO] Baseline refresh: 7 sources updated. {'ingress-nginx': '233ms', 'payment-gateway': '320ms', 'notification-worker': '100ms', 'user-profile': '229ms', 'api-gateway-01': '179ms', 'auth-service': '899ms', 'test': '100ms'}
+10:15:09 [INFO] Checking for pending (unacked) messages from prior runs…
+10:15:09 [INFO] Entering main consume loop (Ctrl-C to stop)…
+[INCIDENT CREATED] #10 failure_burst api-gateway-01  5.0 vs 5.0
+[INCIDENT UPDATED] #10 failure_burst api-gateway-01  6.0 vs 5.0 (was 5.0)
+[INCIDENT CREATED] #11 failure_burst auth-service  5.0 vs 5.0
+[INCIDENT UPDATED] #11 failure_burst auth-service  6.0 vs 5.0 (was 5.0)
+10:15:17 [INFO] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+10:15:17 [INFO] Generated AI summary for incident #10
+[INCIDENT CREATED] #12 failure_burst database-cluster-primary  5.0 vs 5.0
+[INCIDENT UPDATED] #12 failure_burst database-cluster-primary  6.0 vs 5.0 (was 5.0)
+10:15:18 [INFO] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+10:15:18 [INFO] Generated AI summary for incident #11
+[INCIDENT CREATED] #13 failure_burst ingress-nginx  5.0 vs 5.0
+
+==================================================================================
+  ROLLING WINDOW SUMMARY  (10:15:19)  window=60s  burst=30s
+Source                          Total    Err%    AvgRT  Burst   Baseline
+----------------------------------------------------------------------------------
+  api-gateway-01                    6  100.0%   100ms   6 err     179ms  <-- BURST
+  auth-service                      6  100.0%   100ms   6 err     899ms  <-- BURST
+  database-cluster-primary          6  100.0%   100ms   6 err       N/A  <-- BURST
+  ingress-nginx                     5  100.0%   100ms   5 err     233ms  <-- BURST
+==================================================================================
+10:15:19 [INFO] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+[INCIDENT UPDATED] #13 failure_burst ingress-nginx  6.0 vs 5.0 (was 5.0)
+10:15:19 [INFO] Generated AI summary for incident #12
+[INCIDENT CREATED] #14 failure_burst notification-worker  5.0 vs 5.0
+10:15:20 [INFO] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+10:15:20 [INFO] Generated AI summary for incident #13
+[INCIDENT UPDATED] #14 failure_burst notification-worker  6.0 vs 5.0 (was 5.0)
+[INCIDENT CREATED] #15 failure_burst payment-gateway  5.0 vs 5.0
+10:15:21 [WARNING] LLM rate limit reached (5 calls/min). Skipping AI summary for incident #15.
+[INCIDENT UPDATED] #15 failure_burst payment-gateway  6.0 vs 5.0 (was 5.0)
+10:15:21 [INFO] HTTP Request: POST https://api.groq.com/openai/v1/chat/completions "HTTP/1.1 200 OK"
+10:15:21 [INFO] Generated AI summary for incident #14
+[INCIDENT CREATED] #16 failure_burst user-profile  5.0 vs 5.0
+10:15:22 [WARNING] LLM rate limit reached (5 calls/min). Skipping AI summary for incident #16.
+[INCIDENT UPDATED] #16 failure_burst user-profile  6.0 vs 5.0 (was 5.0)
+
+==================================================================================
+  ROLLING WINDOW SUMMARY  (10:15:30)  window=60s  burst=30s
+Source                          Total    Err%    AvgRT  Burst   Baseline
+----------------------------------------------------------------------------------
+  api-gateway-01                    6  100.0%   100ms   6 err     179ms  <-- BURST
+  auth-service                      6  100.0%   100ms   6 err     899ms  <-- BURST
+  database-cluster-primary          6  100.0%   100ms   6 err       N/A  <-- BURST
+  ingress-nginx                     6  100.0%   100ms   6 err     233ms  <-- BURST
+  notification-worker               6  100.0%   100ms   6 err     100ms  <-- BURST
+  payment-gateway                   6  100.0%   100ms   6 err     320ms  <-- BURST
+  user-profile                      6  100.0%   100ms   6 err     229ms  <-- BURST
+==================================================================================

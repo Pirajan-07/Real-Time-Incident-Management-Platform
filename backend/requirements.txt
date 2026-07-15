@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+asyncpg
+redis
+python-jose[cryptography]
+bcrypt
+python-dotenv
+pydantic-settings
+httpx
