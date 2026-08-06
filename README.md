@@ -177,12 +177,47 @@ incidentops/
 │   │   ├── migrate.py          # Applies pending SQL migrations
 │   │   ├── test_*.py           # Manual integration scripts (see scripts/README.md)
 │   │   └── verify_*.py
+│   ├── Procfile                # web/worker process types (Railway, Render)
 │   └── requirements.txt
 ├── frontend/
 │   └── src/                    # React / Vite application
 ├── docker-compose.yml
 └── README.md
 ```
+
+---
+
+## ☁️ Deployment
+
+The frontend and backend deploy to different kinds of platforms — the
+backend needs a host that supports long-running processes and websockets
+(the worker never exits, and `/ws/dashboard` holds a persistent
+connection), which rules out purely serverless platforms like Vercel for
+it.
+
+**Backend — Railway (or Render, Fly.io):**
+1. Create a Railway project from this repo, with the service's root
+   directory set to `backend/`.
+2. Add Railway's Postgres and Redis plugins — they inject `DATABASE_URL`/
+   `REDIS_URL` automatically.
+3. Set the remaining variables from `.env.example` (`INGESTION_API_KEY`,
+   `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH`, `LLM_API_KEY`,
+   `SLACK_WEBHOOK_URL`) in the service's environment settings — generate
+   fresh values, don't reuse local dev ones.
+4. Create **two** services from the same repo/root: one running the
+   `web` process and one running `worker` (see `Procfile`) — Railway lets
+   you pick which Procfile process a service runs.
+5. Run `python scripts/migrate.py` once (Railway's one-off/shell command
+   against the service) to create the schema on the fresh database.
+6. Once you have the Vercel frontend's URL, set `CORS_ORIGINS` to it
+   (comma-separated if you need more than one, e.g. a preview + prod URL).
+
+**Frontend — Vercel:**
+1. Import this repo, set the project's root directory to `frontend/`.
+2. Set `VITE_API_URL` to the backend's public Railway URL
+   (`https://your-service.up.railway.app`) — the websocket URL is derived
+   from it automatically (`https` → `wss`).
+3. Deploy. Vercel auto-detects the Vite build.
 
 ---
 

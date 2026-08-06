@@ -1,4 +1,8 @@
-const BASE_URL = 'http://localhost:8000';
+// VITE_API_URL points at the deployed backend (Railway, etc.) in production;
+// defaults to the local FastAPI dev server. WS_BASE_URL is derived from it
+// (http -> ws, https -> wss) so only one URL needs configuring.
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const WS_BASE_URL = BASE_URL.replace(/^http/, 'ws');
 
 async function fetchWithAuth(url, options = {}, token) {
   const headers = {
@@ -101,7 +105,7 @@ export const api = {
     function connect() {
       if (stopped || !token) return;
 
-      ws = new WebSocket(`ws://localhost:8000/ws/dashboard?token=${token}`);
+      ws = new WebSocket(`${WS_BASE_URL}/ws/dashboard?token=${token}`);
 
       ws.onopen = () => {
         console.log('[WS] Connected to dashboard');

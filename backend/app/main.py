@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.config import settings
 from app.db.database import close_db_pool, init_db_pool, get_conn
 from app.redis_client import close_redis, init_redis, get_redis
 from app.routers import logs, incidents, auth, ws, settings as settings_router, metrics as metrics_router
@@ -45,11 +46,12 @@ app = FastAPI(
 )
 
 # ---------------------------------------------------------------------------
-# CORS – allow the Vite dev server during local development
+# CORS – origins come from CORS_ORIGINS (comma-separated); defaults to the
+# local Vite dev server. Set it to the deployed frontend's URL in production.
 # ---------------------------------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

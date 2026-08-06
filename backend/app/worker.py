@@ -25,8 +25,8 @@ import time
 
 import asyncpg
 import redis.asyncio as aioredis
-from dotenv import dotenv_values
 
+from app.config import settings
 from app.llm import generate_incident_summary
 from app.slack import send_slack_alert
 from app.ws_manager import publish_message
@@ -44,9 +44,11 @@ log = logging.getLogger("worker")
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
-_env = dotenv_values(".env")
-DATABASE_URL = _env["DATABASE_URL"]
-REDIS_URL    = _env["REDIS_URL"]
+# Reads from `settings` (env vars, with .env as a local-dev fallback) rather
+# than parsing .env directly — a hosting platform like Railway injects real
+# environment variables with no .env file on disk.
+DATABASE_URL = settings.database_url
+REDIS_URL    = settings.redis_url
 
 STREAM_NAME   = "logs"
 GROUP_NAME    = "incident-workers"
