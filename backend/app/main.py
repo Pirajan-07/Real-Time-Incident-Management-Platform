@@ -5,9 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.db.database import close_db_pool, init_db_pool, get_conn
 from app.redis_client import close_redis, init_redis, get_redis
-from app.routers import logs, incidents, auth, ws
+from app.routers import logs, incidents, auth, ws, settings as settings_router, metrics as metrics_router
 import asyncio
 from app.ws_manager import redis_subscriber_task
+from app.metrics import metrics_broadcaster_task
 
 
 # ---------------------------------------------------------------------------
@@ -22,9 +23,12 @@ async def lifespan(app: FastAPI):
     
     # Start Redis WebSocket subscriber task
     subscriber_task = asyncio.create_task(redis_subscriber_task())
+    # Start periodic dashboard metrics broadcaster
+    metrics_task = asyncio.create_task(metrics_broadcaster_task())
     yield
     # ── Shut-down ───────────────────────────────────────────────────────────
     subscriber_task.cancel()
+    metrics_task.cancel()
     await close_db_pool()
     await close_redis()
 
@@ -59,6 +63,8 @@ app.include_router(logs.router)
 app.include_router(incidents.router)
 app.include_router(auth.router)
 app.include_router(ws.router)
+app.include_router(settings_router.router)
+app.include_router(metrics_router.router)
 
 
 @app.get("/health", tags=["health"])
@@ -117,3 +123,4 @@ async def health_check():
         health_status["status"] = "degraded"
         
     return health_status
+# Reload trigger

@@ -55,15 +55,11 @@ BLOCK_MS      = 2_000   # block up to 2 s waiting for new messages
 BATCH_SIZE    = 10      # messages per XREADGROUP call
 STATE_KEY     = "worker-1"
 
-# Detection constants
+# Detection window constants (not user-configurable — structural, not thresholds)
 WINDOW_SECS          = 60      # main rolling window
 BURST_WINDOW_SECS    = 30      # tighter window for failure_burst
-ERROR_RATE_THRESHOLD = 10.0    # %
-ERROR_RATE_MIN_TOTAL = 20      # minimum log count before rule fires
-LATENCY_MULTIPLIER   = 2.0     # avg_rt must exceed N× 24h baseline
-BURST_ERROR_THRESHOLD = 5      # N errors in BURST_WINDOW_SECS
 
-# Baseline refresh: re-query 24h averages every this many seconds
+# Baseline/threshold refresh: re-query every this many seconds
 BASELINE_REFRESH_SECS = 300    # 5 minutes
 
 # Summary print interval
@@ -150,6 +146,22 @@ windows: dict[str, SourceWindow] = defaultdict(SourceWindow)
 # 24-hour response-time baseline per source: source -> avg_rt_ms (float|None)
 baseline_rt: dict[str, float | None] = {}
 
+
+@dataclass
+class Thresholds:
+    """Detection thresholds — loaded from the `alert_thresholds` DB row and
+    refreshed periodically so changes made via the Admin UI take effect
+    without restarting the worker. Defaults here only apply until the first
+    refresh, and mirror migration 002's row defaults."""
+    error_rate_threshold: float = 10.0     # %
+    error_rate_min_total: int = 20         # minimum log count before rule fires
+    latency_multiplier: float = 2.0        # avg_rt must exceed N× 24h baseline
+    burst_error_threshold: int = 5         # N errors in BURST_WINDOW_SECS
+
+
+# Mutable module-level instance — updated in place by _refresh_thresholds().
+thresholds = Thresholds()
+
 # Rate limit state for LLM calls (timestamps)
 llm_call_times: deque[float] = deque()
 
@@ -194,6 +206,25 @@ async def _refresh_baselines(pg_conn: asyncpg.Connection) -> None:
     )
 
 
+async def _refresh_thresholds(pg_conn: asyncpg.Connection) -> None:
+    """Reload detection thresholds from the `alert_thresholds` row in place."""
+    row = await pg_conn.fetchrow("SELECT * FROM alert_thresholds WHERE id = 1")
+    if row is None:
+        log.warning("alert_thresholds row missing — keeping current in-memory values.")
+        return
+    thresholds.error_rate_threshold = row["error_rate_threshold"]
+    thresholds.error_rate_min_total = row["error_rate_min_total"]
+    thresholds.latency_multiplier = row["latency_multiplier"]
+    thresholds.burst_error_threshold = row["burst_error_threshold"]
+    log.info(
+        "Thresholds refresh: error_rate=%.1f%% min_total=%d latency_x=%.1f burst=%d",
+        thresholds.error_rate_threshold,
+        thresholds.error_rate_min_total,
+        thresholds.latency_multiplier,
+        thresholds.burst_error_threshold,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Anomaly detection rules
 # ---------------------------------------------------------------------------
@@ -211,19 +242,19 @@ def _check_rules(source: str) -> list[dict]:
     last_id = w.events[-1].log_id if w.events else 0
 
     # -- Rule 1: error_rate_spike --------------------------------------------
-    if w.total >= ERROR_RATE_MIN_TOTAL and w.error_rate > ERROR_RATE_THRESHOLD:
+    if w.total >= thresholds.error_rate_min_total and w.error_rate > thresholds.error_rate_threshold:
         fired.append({
             "trigger_reason":  "error_rate_spike",
             "title":           f"Error Rate Spike - {source}",
             "metric_value":    round(w.error_rate, 2),
-            "threshold_value": ERROR_RATE_THRESHOLD,
+            "threshold_value": thresholds.error_rate_threshold,
             "last_log_id":     last_id,
         })
 
     # -- Rule 2: latency_spike -----------------------------------------------
     baseline = baseline_rt.get(source)
     if baseline and w.avg_rt is not None:
-        threshold = baseline * LATENCY_MULTIPLIER
+        threshold = baseline * thresholds.latency_multiplier
         if w.avg_rt > threshold:
             fired.append({
                 "trigger_reason":  "latency_spike",
@@ -235,12 +266,12 @@ def _check_rules(source: str) -> list[dict]:
 
     # -- Rule 3: failure_burst -----------------------------------------------
     burst_last_id = w.burst_events[-1].log_id if w.burst_events else 0
-    if w.burst_error_count >= BURST_ERROR_THRESHOLD:
+    if w.burst_error_count >= thresholds.burst_error_threshold:
         fired.append({
             "trigger_reason":  "failure_burst",
             "title":           f"Failure Burst - {source}",
             "metric_value":    float(w.burst_error_count),
-            "threshold_value": float(BURST_ERROR_THRESHOLD),
+            "threshold_value": float(thresholds.burst_error_threshold),
             "last_log_id":     burst_last_id,
         })
 
@@ -412,12 +443,12 @@ def _print_summary() -> None:
             base   = f"{baseline_rt.get(src):.0f}ms" if baseline_rt.get(src) else "  N/A"
             burst  = f"{w.burst_error_count} err"
             alerts = []
-            if w.total >= ERROR_RATE_MIN_TOTAL and w.error_rate > ERROR_RATE_THRESHOLD:
+            if w.total >= thresholds.error_rate_min_total and w.error_rate > thresholds.error_rate_threshold:
                 alerts.append("ERR%")
             bl = baseline_rt.get(src)
-            if bl and w.avg_rt and w.avg_rt > bl * LATENCY_MULTIPLIER:
+            if bl and w.avg_rt and w.avg_rt > bl * thresholds.latency_multiplier:
                 alerts.append("LAT")
-            if w.burst_error_count >= BURST_ERROR_THRESHOLD:
+            if w.burst_error_count >= thresholds.burst_error_threshold:
                 alerts.append("BURST")
             flag = f"  <-- {','.join(alerts)}" if alerts else ""
             print(
@@ -545,9 +576,10 @@ async def run() -> None:
 
     await _ensure_consumer_group(redis)
 
-    # -- Initial baseline load -----------------------------------------------
+    # -- Initial baseline + thresholds load -----------------------------------
     async with get_conn() as conn:
         await _refresh_baselines(conn)
+        await _refresh_thresholds(conn)
 
     # -- Claim any unacked pending messages from a prior crash ---------------
     log.info("Checking for pending (unacked) messages from prior runs…")
@@ -575,9 +607,10 @@ async def run() -> None:
             while True:
                 now_loop = asyncio.get_event_loop().time()
 
-                # Periodic 24h baseline refresh
+                # Periodic 24h baseline + thresholds refresh
                 if now_loop - last_baseline >= BASELINE_REFRESH_SECS:
                     await _refresh_baselines(conn)
+                    await _refresh_thresholds(conn)
                     last_baseline = now_loop
 
                 # Rolling-window summary + eviction

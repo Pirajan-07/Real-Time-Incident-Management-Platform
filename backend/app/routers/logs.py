@@ -9,7 +9,7 @@ Returns 201 with the new log's id and created_at timestamp.
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Query, status, Depends
@@ -113,27 +113,78 @@ async def create_log(
     return LogCreated(id=log_id, created_at=created_at)
 
 @router.get(
+    "/count",
+    summary="Count logs matching optional filters",
+)
+async def count_logs(
+    source: str | None = Query(None, description="Filter by source"),
+    level: str | None = Query(None, description="Filter by log level (INFO, WARN, ERROR)"),
+    since: str | None = Query(None, description="ISO timestamp lower-bound for created_at"),
+    user: str = Depends(get_current_user),
+) -> dict[str, int]:
+    """Return the total number of logs matching the given filters (no row data)."""
+    conditions: list[str] = []
+    args: list[Any] = []
+
+    if source:
+        args.append(source)
+        conditions.append(f"source = ${len(args)}")
+    if level:
+        args.append(level.upper())
+        conditions.append(f"level = ${len(args)}")
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since.replace("Z", ""))
+            args.append(since_dt)
+            conditions.append(f"created_at >= ${len(args)}")
+        except ValueError:
+            pass  # ignore malformed since param
+
+    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    query = f"SELECT COUNT(*) FROM logs {where_clause}"
+
+    async with get_conn() as conn:
+        row = await conn.fetchrow(query, *args)
+        return {"count": row[0]}
+
+
+@router.get(
     "",
     summary="List recent logs",
 )
 async def list_logs(
     source: str | None = Query(None, description="Filter by source"),
+    level: str | None = Query(None, description="Filter by log level (INFO, WARN, ERROR)"),
+    since: str | None = Query(None, description="ISO timestamp lower-bound for created_at"),
     limit: int = Query(50, ge=1, le=1000, description="Max number of logs to return"),
     user: str = Depends(get_current_user),
 ) -> list[dict[str, Any]]:
-    """List recent logs, optionally filtered by source."""
+    """List recent logs, optionally filtered by source, level, and/or time range."""
+    # Build WHERE clause dynamically from provided filters
+    conditions: list[str] = []
+    args: list[Any] = []
+
+    if source:
+        args.append(source)
+        conditions.append(f"source = ${len(args)}")
+    if level:
+        args.append(level.upper())
+        conditions.append(f"level = ${len(args)}")
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since.replace("Z", ""))
+            args.append(since_dt)
+            conditions.append(f"created_at >= ${len(args)}")
+        except ValueError:
+            pass  # ignore malformed since param
+
+    where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+    args.append(limit)
+    query = f"SELECT * FROM logs {where_clause} ORDER BY created_at DESC LIMIT ${len(args)}"
+
     async with get_conn() as conn:
-        if source:
-            rows = await conn.fetch(
-                "SELECT * FROM logs WHERE source = $1 ORDER BY created_at DESC LIMIT $2",
-                source, limit
-            )
-        else:
-            rows = await conn.fetch(
-                "SELECT * FROM logs ORDER BY created_at DESC LIMIT $1",
-                limit
-            )
-            
+        rows = await conn.fetch(query, *args)
+
         # Convert JSON strings/bytes or asyncpg Records into standard dicts
         result = []
         for r in rows:
@@ -141,5 +192,5 @@ async def list_logs(
             if isinstance(d.get("payload"), str):
                 d["payload"] = json.loads(d["payload"])
             result.append(d)
-            
+
         return result
