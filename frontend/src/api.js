@@ -20,8 +20,8 @@ async function fetchWithAuth(url, options = {}, token) {
     try {
       const errorData = await response.json();
       errMessage = errorData.detail || errMessage;
-    } catch (e) {
-      // ignore
+    } catch {
+      // response body wasn't JSON — fall back to statusText
     }
     throw new Error(errMessage);
   }
@@ -53,32 +53,102 @@ export const api = {
     }, token);
   },
   
-  getLogs: async (source, limit, token) => {
+  getLogs: async (source, level, since, limit, token) => {
     let params = new URLSearchParams();
     if (source && source !== 'all') params.append('source', source);
+    if (level && level !== 'all') params.append('level', level);
+    if (since) params.append('since', since);
     if (limit) params.append('limit', limit);
     
     const qs = params.toString();
     const url = qs ? `/logs?${qs}` : '/logs';
     return fetchWithAuth(url, {}, token);
   },
-  
+
+  getLogCount: async (since, token) => {
+    const params = new URLSearchParams();
+    if (since) params.append('since', since);
+    return fetchWithAuth(`/logs/count?${params.toString()}`, {}, token);
+  },
+
+  getMetricsTimeseries: async (token) => {
+    return fetchWithAuth('/metrics/timeseries', {}, token);
+  },
+
+  getThresholds: async (token) => {
+    return fetchWithAuth('/settings/thresholds', {}, token);
+  },
+
+  updateThresholds: async (payload, token) => {
+    return fetchWithAuth('/settings/thresholds', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    }, token);
+  },
+
   connectWebSocket: (token, onMessage) => {
-    const ws = new WebSocket(`ws://localhost:8000/ws/dashboard?token=${token}`);
-    
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        onMessage(data);
-      } catch (e) {
-        console.error("Error parsing WS message", e);
-      }
+    // Returns a controller { close() } that stops reconnection cleanly.
+    // Reconnects with exponential backoff (1 s → 2 s → … → 15 s cap) on
+    // any close or error. Stops immediately when close() is called (e.g.
+    // Dashboard unmount or logout — no token guard prevents zombie loops).
+    const MIN_DELAY = 1000;
+    const MAX_DELAY = 15000;
+    let delay = MIN_DELAY;
+    let ws = null;
+    let stopped = false;
+    let retryTimer = null;
+
+    function connect() {
+      if (stopped || !token) return;
+
+      ws = new WebSocket(`ws://localhost:8000/ws/dashboard?token=${token}`);
+
+      ws.onopen = () => {
+        console.log('[WS] Connected to dashboard');
+        delay = MIN_DELAY; // reset backoff after a successful handshake
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          onMessage(JSON.parse(event.data));
+        } catch (e) {
+          console.error('[WS] Failed to parse message:', e);
+        }
+      };
+
+      ws.onerror = (err) => {
+        // onerror always fires before onclose — log here, retry in onclose
+        console.warn('[WS] Socket error:', err);
+      };
+
+      ws.onclose = (event) => {
+        if (stopped) return; // intentional .close() call — do not retry
+        console.warn(
+          `[WS] Disconnected (code=${event.code}, reason="${event.reason}"). ` +
+          `Retrying in ${delay / 1000}s…`
+        );
+        retryTimer = setTimeout(() => {
+          delay = Math.min(delay * 2, MAX_DELAY);
+          connect();
+        }, delay);
+      };
+    }
+
+    connect(); // initiate first connection immediately
+
+    return {
+      /** Call this to permanently stop the socket and all pending retries. */
+      close() {
+        stopped = true;
+        if (retryTimer) {
+          clearTimeout(retryTimer);
+          retryTimer = null;
+        }
+        if (ws) {
+          ws.close();
+          ws = null;
+        }
+      },
     };
-    
-    ws.onerror = (err) => {
-      console.error("WebSocket error", err);
-    };
-    
-    return ws;
-  }
+  },
 };

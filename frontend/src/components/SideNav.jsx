@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import { useNav, SIDENAV_EXPANDED, SIDENAV_COLLAPSED } from '../NavContext';
 
 const navItems = [
   { to: '/dashboard', icon: 'dashboard', label: 'Dashboard' },
@@ -7,9 +8,12 @@ const navItems = [
 ];
 
 export default function SideNav() {
+  const { collapsed, toggle } = useNav();
+  const width = collapsed ? SIDENAV_COLLAPSED : SIDENAV_EXPANDED;
+
   return (
     <nav style={{
-      width: 220,
+      width,
       height: '100vh',
       position: 'fixed',
       left: 0,
@@ -19,18 +23,53 @@ export default function SideNav() {
       display: 'flex',
       flexDirection: 'column',
       justifyContent: 'space-between',
+      overflow: 'hidden',
+      transition: 'width 0.18s ease',
       zIndex: 50,
     }}>
       {/* Brand */}
       <div>
-        <div style={{ padding: '16px 16px 24px', borderBottom: '1px solid var(--outline-variant)' }}>
-          <h1 style={{
-            fontFamily: 'Manrope',
-            fontSize: 20,
-            fontWeight: 700,
-            color: 'var(--on-surface)',
-            letterSpacing: '-0.02em',
-          }}>IncidentOps</h1>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: collapsed ? 'center' : 'space-between',
+          padding: collapsed ? '16px 8px 24px' : '16px 16px 24px',
+          borderBottom: '1px solid var(--outline-variant)',
+        }}>
+          {!collapsed && (
+            <h1 style={{
+              fontFamily: 'Manrope',
+              fontSize: 20,
+              fontWeight: 700,
+              color: 'var(--on-surface)',
+              letterSpacing: '-0.02em',
+              whiteSpace: 'nowrap',
+            }}>IncidentOps</h1>
+          )}
+          <button
+            onClick={toggle}
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            style={{
+              width: 28,
+              height: 28,
+              flexShrink: 0,
+              borderRadius: 6,
+              border: '1px solid var(--outline-variant)',
+              background: 'var(--surface-container-high)',
+              color: 'var(--on-surface-variant)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              transition: 'background 0.15s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-container-highest)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'var(--surface-container-high)'}
+          >
+            <span className="material-symbols-outlined" style={{ fontSize: 16 }}>
+              {collapsed ? 'chevron_right' : 'chevron_left'}
+            </span>
+          </button>
         </div>
 
         {/* Nav Links */}
@@ -39,11 +78,13 @@ export default function SideNav() {
             <NavLink
               key={to}
               to={to}
+              title={collapsed ? label : undefined}
               style={({ isActive }) => ({
                 display: 'flex',
                 alignItems: 'center',
+                justifyContent: collapsed ? 'center' : 'flex-start',
                 gap: 12,
-                padding: '8px 16px',
+                padding: collapsed ? '10px 0' : '8px 16px',
                 color: isActive ? 'var(--on-surface)' : 'var(--on-surface-variant)',
                 background: isActive ? 'var(--primary-container)' : 'transparent',
                 borderLeft: isActive ? '4px solid var(--terracotta)' : '4px solid transparent',
@@ -52,13 +93,14 @@ export default function SideNav() {
                 textDecoration: 'none',
                 transition: 'all 0.15s',
                 fontFamily: 'Manrope',
+                whiteSpace: 'nowrap',
               })}
             >
               <span
                 className="material-symbols-outlined"
-                style={{ fontSize: 20 }}
+                style={{ fontSize: 20, flexShrink: 0 }}
               >{icon}</span>
-              {label}
+              {!collapsed && label}
             </NavLink>
           ))}
         </div>
@@ -66,24 +108,29 @@ export default function SideNav() {
 
       {/* Footer Nav */}
       <div style={{ borderTop: '1px solid var(--outline-variant)', padding: '8px 0' }}>
-        <a href="#" style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          padding: '8px 16px',
-          color: 'var(--on-surface-variant)',
-          fontSize: 14,
-          textDecoration: 'none',
-          transition: 'background 0.15s',
-          fontFamily: 'Manrope',
-          borderLeft: '4px solid transparent',
-        }}
-          onMouseEnter={e => e.currentTarget.style.background = 'var(--surface-container-high)'}
-          onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+        <NavLink
+          to="/admin"
+          title={collapsed ? 'Admin' : undefined}
+          style={({ isActive }) => ({
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: collapsed ? 'center' : 'flex-start',
+            gap: 12,
+            padding: collapsed ? '10px 0' : '8px 16px',
+            color: isActive ? 'var(--on-surface)' : 'var(--on-surface-variant)',
+            background: isActive ? 'var(--primary-container)' : 'transparent',
+            borderLeft: isActive ? '4px solid var(--terracotta)' : '4px solid transparent',
+            fontWeight: isActive ? 600 : 400,
+            fontSize: 14,
+            textDecoration: 'none',
+            transition: 'all 0.15s',
+            fontFamily: 'Manrope',
+            whiteSpace: 'nowrap',
+          })}
         >
-          <span className="material-symbols-outlined" style={{ fontSize: 20 }}>admin_panel_settings</span>
-          Admin
-        </a>
+          <span className="material-symbols-outlined" style={{ fontSize: 20, flexShrink: 0 }}>admin_panel_settings</span>
+          {!collapsed && 'Admin'}
+        </NavLink>
       </div>
     </nav>
   );

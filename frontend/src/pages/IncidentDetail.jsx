@@ -1,29 +1,60 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import SideNav from '../components/SideNav';
 import AppFooter from '../components/AppFooter';
 import { api } from '../api';
 import { useAuth } from '../AuthContext';
+import { useNav, SIDENAV_EXPANDED, SIDENAV_COLLAPSED } from '../NavContext';
+
+// Returns the time portion of an ISO string (HH:MM:SS.mmm) or '—' for null/invalid
+const formatTime = (val) => {
+  if (val == null) return '—';
+  const d = new Date(val);
+  if (isNaN(d.getTime())) return '—';
+  return d.toISOString().split('T')[1].replace('Z', '');
+};
+
+// Returns e.g. '5m ago' or '—' when date is missing/invalid
+const formatTimeAgo = (val) => {
+  if (val == null) return '—';
+  const d = new Date(val);
+  if (isNaN(d.getTime())) return '—';
+  return Math.floor((new Date() - d) / 60000) + 'm ago';
+};
+
+// Returns a localised HH:MM string or '—' for null/invalid
+const formatLocalTime = (val) => {
+  if (val == null) return '—';
+  const d = new Date(val);
+  if (isNaN(d.getTime())) return '—';
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
 
 export default function IncidentDetail() {
   const navigate = useNavigate();
   const { id } = useParams();
   const { token } = useAuth();
-  
+  const { collapsed } = useNav();
+  const navWidth = collapsed ? SIDENAV_COLLAPSED : SIDENAV_EXPANDED;
+
   const [incident, setIncident] = useState(null);
-  
-  const fetchIncident = async () => {
+  // The incident detail endpoint doesn't include logs — fetched separately, scoped to the incident's source.
+  const [relatedLogs, setRelatedLogs] = useState([]);
+
+  const fetchIncident = useCallback(async () => {
     try {
       const data = await api.getIncidentDetail(id, token);
       setIncident(data);
+      const logsData = await api.getLogs(data.source, 'all', null, 20, token);
+      setRelatedLogs(logsData);
     } catch (err) {
       console.error(err);
     }
-  };
+  }, [id, token]);
 
   useEffect(() => {
     fetchIncident();
-  }, [id, token]);
+  }, [fetchIncident]);
   
   if (!incident) return <div style={{ color: 'white', padding: 24, fontFamily: 'Manrope' }}>Loading incident...</div>;
 
@@ -52,21 +83,20 @@ export default function IncidentDetail() {
   };
 
   const ui = getStatusUI(incident.status);
-  const created = new Date(incident.created_at);
-  const timeAgo = Math.floor((new Date() - created) / 60000) + 'm ago';
+  const timeAgo = formatTimeAgo(incident.created_at);
   
   const timeline = [
-    { time: created.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}), label: `Threshold breached (${incident.metric_value.toFixed(1)})`, timeColor: 'var(--error)', dotColor: 'var(--error)' },
-    { time: created.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}), label: 'Incident created', timeColor: 'var(--on-surface-variant)', dotColor: 'var(--outline-variant)' }
+    { time: formatLocalTime(incident.created_at), label: `Threshold breached (${incident.metric_value.toFixed(1)})`, timeColor: 'var(--error)', dotColor: 'var(--error)' },
+    { time: formatLocalTime(incident.created_at), label: 'Incident created', timeColor: 'var(--on-surface-variant)', dotColor: 'var(--outline-variant)' }
   ];
   if (incident.ai_summary) {
-    timeline.push({ time: new Date(incident.updated_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}), label: 'AI analysis generated', timeColor: 'var(--secondary)', dotColor: 'var(--secondary)' });
+    timeline.push({ time: formatLocalTime(incident.updated_at), label: 'AI analysis generated', timeColor: 'var(--secondary)', dotColor: 'var(--secondary)' });
   }
 
   return (
     <div style={{ display: 'flex', height: '100vh', background: 'var(--background)', fontFamily: 'Manrope', overflow: 'hidden' }}>
       <SideNav />
-      <div style={{ marginLeft: 220, flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', width: 'calc(100% - 220px)', overflow: 'hidden' }}>
+      <div style={{ marginLeft: navWidth, flex: 1, display: 'flex', flexDirection: 'column', height: '100vh', width: `calc(100% - ${navWidth}px)`, overflow: 'hidden', transition: 'margin-left 0.18s ease, width 0.18s ease' }}>
         {/* Header */}
         <header style={{ flexShrink: 0, padding: '24px 32px 16px' }}>
           <button onClick={() => navigate('/incidents')} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontFamily: 'JetBrains Mono', fontSize: 12, color: 'var(--on-surface-variant)', background: 'none', border: 'none', cursor: 'pointer', marginBottom: 24, transition: 'color 0.15s' }}>
@@ -147,12 +177,13 @@ export default function IncidentDetail() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(incident.logs || []).map((log, i) => {
+                      {relatedLogs.length === 0 ? (
+                        <tr><td colSpan={3} style={{ padding: '24px 16px', textAlign: 'center', color: 'var(--on-surface-variant)' }}>No related logs found for this source</td></tr>
+                      ) : relatedLogs.map((log, i) => {
                         const lUI = getLevelUI(log.level);
-                        const ts = new Date(log.timestamp);
                         return (
                         <tr key={i} style={{ borderBottom: '1px solid rgba(66,72,68,0.3)', background: i % 2 ? 'rgba(11,15,12,0.5)' : 'transparent', cursor: 'pointer' }}>
-                          <td style={{ padding: '6px 16px', color: 'var(--on-surface-variant)' }}>{ts.toISOString().split('T')[1].replace('Z','')}</td>
+                          <td style={{ padding: '6px 16px', color: 'var(--on-surface-variant)' }}>{formatTime(log.timestamp)}</td>
                           <td style={{ padding: '6px 16px' }}><span style={{ color: lUI.color, background: lUI.bg, padding: '0 4px', borderRadius: 2 }}>{log.level}</span></td>
                           <td style={{ padding: '6px 16px', color: 'var(--on-surface)' }}>{log.message}</td>
                         </tr>

@@ -1,10 +1,14 @@
+import { useNav, SIDENAV_EXPANDED, SIDENAV_COLLAPSED } from '../NavContext';
+
 export default function AppFooter() {
+  const { collapsed } = useNav();
+
   return (
     <footer style={{
       position: 'fixed',
       bottom: 0,
       right: 0,
-      left: 220,
+      left: collapsed ? SIDENAV_COLLAPSED : SIDENAV_EXPANDED,
       height: 32,
       background: 'var(--surface-container-lowest)',
       borderTop: '1px solid var(--outline-variant)',
@@ -12,6 +16,7 @@ export default function AppFooter() {
       justifyContent: 'space-between',
       alignItems: 'center',
       padding: '0 16px',
+      transition: 'left 0.18s ease',
       zIndex: 40,
     }}>
       <span style={{
