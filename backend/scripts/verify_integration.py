@@ -3,10 +3,22 @@ import json
 import urllib.request
 import httpx
 import websockets
-import time
+from datetime import datetime, timedelta, timezone
 
-TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJhZG1pbkBpbmNpZGVudG9wcy5jb20iLCJleHAiOjE3ODQxMzYxNjB9.d4bQafiBMW1ceK-fDL35J2B66tF90qoVs18Y4mmxmzQ"
-API_KEY = "evavIix9y3XyoJTR-1s2Wdf44SpqAHyMztQzYnQjqiI"
+from dotenv import dotenv_values
+from jose import jwt
+
+# Secrets are loaded from .env, never hardcoded (this file is committed to git).
+_env = dotenv_values('.env')
+API_KEY = _env['INGESTION_API_KEY']
+
+# Mint a short-lived admin token locally — same claims POST /auth/login would
+# issue — instead of embedding a static one in source.
+TOKEN = jwt.encode(
+    {"sub": _env['ADMIN_EMAIL'], "exp": datetime.now(timezone.utc) + timedelta(minutes=10)},
+    _env['JWT_SECRET'],
+    algorithm=_env.get('JWT_ALGORITHM', 'HS256'),
+)
 WS_URL = f"ws://localhost:8000/ws/dashboard?token={TOKEN}"
 
 async def run_verification():

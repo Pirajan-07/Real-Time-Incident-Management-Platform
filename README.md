@@ -52,7 +52,7 @@ graph TD
 | **Real-Time Data** | WebSockets (via FastAPI & `websockets`) |
 | **Authentication** | JWT (`python-jose`), Passlib/Bcrypt |
 | **Infrastructure** | Docker Compose (for Postgres/Redis orchestration) |
-| **Frontend** | React, Vite (Phase 6) |
+| **Frontend** | React 19, Vite |
 
 ---
 
@@ -66,7 +66,9 @@ graph TD
 * **Incident Deduplication**: Intelligently groups ongoing anomalies. If a rule continues to fire for a specific source, it updates the existing open incident metrics rather than spamming the database.
 * **AI Root Cause Analysis**: When a brand new incident is generated, the system feeds the last 10 logs to a Groq LLM (Llama 3.3 70B) to generate a root cause hypothesis and actionable troubleshooting steps. Includes a robust internal rate limiter (max 5 calls/min) to prevent API exhaustion.
 * **Slack Alerting**: Automatically sends a formatted webhook payload to Slack on new incident creation.
-* **Live WebSocket Dashboard**: Connects the frontend to the backend via a Redis Pub/Sub bridged WebSocket, streaming delta log updates, incident creations, and incident metric updates live to the browser.
+* **Live WebSocket Dashboard**: Connects the frontend to the backend via a Redis Pub/Sub bridged WebSocket, streaming delta log updates, incident creations, incident metric updates, and bucketed error-rate/latency history live to the browser (no polling).
+* **Real Historical Metrics**: The dashboard's trend charts are backed by a real query bucketing `logs` into rolling 5-minute windows over the trailing hour, re-broadcast every 15s — not placeholder data.
+* **Configurable Alert Thresholds**: The three detection rules' thresholds (error-rate %, latency multiplier, burst count) live in the database and are editable from the Admin page; the worker picks up changes within 5 minutes, no redeploy needed.
 * **Secure JWT Authentication**: All human-facing REST and WebSocket endpoints are secured via expiring JSON Web Tokens.
 
 ---
@@ -100,7 +102,11 @@ graph TD
    ```
 
 4. **Initialize the Database**:
-   *(Run the raw SQL migrations/schemas inside the Postgres container or via a script once added).*
+   ```bash
+   cd backend
+   python scripts/migrate.py
+   ```
+   Applies everything in `app/db/migrations/` in order, tracked in a `schema_migrations` table so it's safe to re-run after pulling new migrations.
 
 5. **Run the Backend Services**:
    ```bash
@@ -114,7 +120,7 @@ graph TD
    python -m app.worker
    ```
 
-6. **Run the Frontend (Phase 6)**:
+6. **Run the Frontend**:
    ```bash
    cd frontend
    npm install
@@ -128,12 +134,17 @@ graph TD
 | Method | Path | Authentication | Description |
 | :--- | :--- | :--- | :--- |
 | **`POST`** | `/logs` | `X-API-Key` (Header) | Ingests a new log payload, validates it, and pushes it to the Redis stream. |
+| **`GET`** | `/logs` | JWT (Header) | Lists recent logs, filterable by source/level/time range. |
+| **`GET`** | `/logs/count` | JWT (Header) | Count of logs matching optional filters (used for the "Logs Today" KPI). |
 | **`GET`** | `/incidents` | JWT (Header) | Lists all incidents, supporting filtering and sorting. |
 | **`GET`** | `/incidents/{id}` | JWT (Header) | Fetches deep details for a specific incident, including AI summaries. |
 | **`PATCH`** | `/incidents/{id}` | JWT (Header) | Updates an incident's status (e.g., `acknowledged`, `resolved`). |
+| **`GET`** | `/metrics/timeseries` | JWT (Header) | Bucketed error-rate/latency history for the trailing hour (same series pushed live over the websocket). |
+| **`GET`** | `/settings/thresholds` | JWT (Header) | Current alert-detection thresholds. |
+| **`PUT`** | `/settings/thresholds` | JWT (Header) | Updates alert-detection thresholds; the worker picks them up on its next refresh. |
 | **`POST`** | `/auth/login` | None | Validates credentials and returns an expiring access token. |
 | **`GET`** | `/health` | None | Returns connectivity status for DB, Redis, and calculates exact Stream Consumer lag. |
-| **`WS`** | `/ws/dashboard` | JWT (Query Param) | WebSocket endpoint for live log streaming and incident updates. |
+| **`WS`** | `/ws/dashboard` | JWT (Query Param) | WebSocket endpoint for live log streaming, incident updates, and metrics broadcasts. |
 
 ---
 
@@ -144,22 +155,28 @@ incidentops/
 ├── backend/
 │   ├── app/
 │   │   ├── db/
-│   │   │   └── database.py
+│   │   │   ├── database.py
+│   │   │   └── migrations/     # Numbered raw SQL migrations
 │   │   ├── routers/
 │   │   │   ├── auth.py
 │   │   │   ├── incidents.py
 │   │   │   ├── logs.py
+│   │   │   ├── metrics.py
+│   │   │   ├── settings.py
 │   │   │   └── ws.py
 │   │   ├── config.py
 │   │   ├── llm.py
 │   │   ├── main.py
+│   │   ├── metrics.py          # Timeseries aggregation + live broadcaster task
 │   │   ├── redis_client.py
 │   │   ├── slack.py
 │   │   ├── worker.py
 │   │   └── ws_manager.py
 │   ├── scripts/
 │   │   ├── producer.py         # Simulates organic & burst microservice traffic
-│   │   └── test_*.py           # Integration test scripts
+│   │   ├── migrate.py          # Applies pending SQL migrations
+│   │   ├── test_*.py           # Manual integration scripts (see scripts/README.md)
+│   │   └── verify_*.py
 │   └── requirements.txt
 ├── frontend/
 │   └── src/                    # React / Vite application
@@ -173,4 +190,5 @@ incidentops/
 
 1. **User Management**: Currently, the system relies on a single hardcoded admin user (defined in the environment via `ADMIN_EMAIL` and `ADMIN_PASSWORD_HASH`). A full RBAC user management system and database table are needed for production.
 2. **Dockerization**: While PostgreSQL and Redis run in Docker, the FastAPI application and the Python worker currently run natively on the host machine for local development. A unified `docker-compose` setup encompassing the app/worker containers is a logical next step.
-3. **Database Migrations**: The system lacks an automated migration tool (like Alembic); schemas are currently initialized via raw scripts or manual DB commands.
+3. **Database Migrations**: `scripts/migrate.py` applies raw SQL files in order and tracks what's run in `schema_migrations` — it isn't a full tool like Alembic (no down-migrations, no autogeneration from model diffs), but it replaces manual DB commands.
+4. **Automated Test Suite**: `backend/scripts/test_*.py` are manual, full-stack integration scripts (they boot the API + worker as subprocesses) rather than a CI-friendly `pytest` suite with fixtures/mocks.
