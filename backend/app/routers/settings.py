@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.db.database import get_conn
@@ -34,6 +34,8 @@ class ThresholdsUpdate(BaseModel):
 async def get_thresholds(user: str = Depends(get_current_user)):
     async with get_conn() as conn:
         row = await conn.fetchrow("SELECT * FROM alert_thresholds WHERE id = 1")
+        if row is None:
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "alert_thresholds row is missing")
         return dict(row)
 
 
@@ -56,4 +58,6 @@ async def update_thresholds(update: ThresholdsUpdate, user: str = Depends(get_cu
             update.latency_multiplier,
             update.burst_error_threshold,
         )
+        if row is None:
+            raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "alert_thresholds row is missing")
         return dict(row)
