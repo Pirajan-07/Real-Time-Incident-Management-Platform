@@ -1,0 +1,83 @@
+%YAML 1.1
+---
+# Render Blueprint — connect this repo as a Blueprint in the Render dashboard
+# and it provisions everything below in one go. See README.md's Deployment
+# section for the full walkthrough (env vars to fill in, migration step,
+# connecting the Vercel frontend).
+#
+# Cost note: web + worker on `starter` ($7/mo each) is recommended so the
+# app doesn't cold-start on a visitor; postgres/keyvalue are left on `free`
+# since this project's data is synthetic demo traffic, not something that
+# matters if it's ever reset. Bump their plans below if you want it durable.
+
+services:
+  - name: incidentops-api
+    type: web
+    runtime: python
+    plan: starter
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: incidentops-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: incidentops-redis
+          type: keyvalue
+          property: connectionString
+      - key: INGESTION_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: SLACK_WEBHOOK_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+
+  - name: incidentops-worker
+    type: worker
+    runtime: python
+    plan: starter
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.worker
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: incidentops-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          name: incidentops-redis
+          type: keyvalue
+          property: connectionString
+      - key: INGESTION_API_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: LLM_API_KEY
+        sync: false
+      - key: SLACK_WEBHOOK_URL
+        sync: false
+
+  - name: incidentops-redis
+    type: keyvalue
+    plan: free
+    ipAllowList: []
+
+databases:
+  - name: incidentops-db
+    plan: free
