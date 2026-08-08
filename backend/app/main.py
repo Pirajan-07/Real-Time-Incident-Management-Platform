@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -13,6 +14,7 @@ from app.ws_manager import redis_subscriber_task
 from app.metrics import metrics_broadcaster_task
 from app.worker import run as run_worker
 
+log = logging.getLogger("main")
 
 # ---------------------------------------------------------------------------
 # Lifespan: start-up & shut-down hooks
@@ -21,14 +23,23 @@ from app.worker import run as run_worker
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Start-up ────────────────────────────────────────────────────────────
-    await init_db_pool()
-    # Self-heal the schema on every boot — Render's free web-service tier has
-    # no Shell to run scripts/migrate.py by hand, and its free Postgres plan
-    # gets recreated from scratch periodically. Idempotent, so harmless
-    # elsewhere too.
+    # Logged explicitly at each phase, and each phase has its own timeout
+    # below — so if the app ever fails to come up (e.g. can't reach the
+    # database), the logs show exactly which step it got stuck on instead of
+    # going silent until the host's own deploy-timeout gives up.
+    log.info("Connecting to database...")
+    await asyncio.wait_for(init_db_pool(), timeout=20)
+
+    log.info("Applying pending migrations...")
+    # Self-heals the schema on every boot — Render's free web-service tier
+    # has no Shell to run scripts/migrate.py by hand, and its free Postgres
+    # plan gets recreated from scratch periodically. Idempotent, so
+    # harmless elsewhere too.
     async with get_conn() as conn:
-        await apply_pending_migrations(conn)
-    await init_redis()
+        await asyncio.wait_for(apply_pending_migrations(conn), timeout=30)
+
+    log.info("Connecting to Redis...")
+    await asyncio.wait_for(init_redis(), timeout=20)
 
     # Start Redis WebSocket subscriber task
     subscriber_task = asyncio.create_task(redis_subscriber_task())
