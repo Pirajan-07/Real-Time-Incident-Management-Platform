@@ -102,11 +102,14 @@ graph TD
    ```
 
 4. **Initialize the Database**:
-   ```bash
-   cd backend
-   python scripts/migrate.py
-   ```
-   Applies everything in `app/db/migrations/` in order, tracked in a `schema_migrations` table so it's safe to re-run after pulling new migrations.
+   - **First time setting up a local Postgres container from scratch**: bootstrap
+     it by hand first — see `app/db/local_dev_bootstrap/README.md` (this step
+     only exists for local Docker; managed providers create the database and
+     user for you already).
+   - The actual schema doesn't need a manual step: the app applies any
+     pending files in `app/db/migrations/` itself on every startup (tracked
+     in a `schema_migrations` table, safe to re-run). You can also trigger it
+     directly without starting the app: `python scripts/migrate.py`.
 
 5. **Run the Backend Services**:
    ```bash
@@ -156,7 +159,9 @@ incidentops/
 │   ├── app/
 │   │   ├── db/
 │   │   │   ├── database.py
-│   │   │   └── migrations/     # Numbered raw SQL migrations
+│   │   │   ├── migrator.py         # Shared migration-apply logic (auto-run + CLI both use it)
+│   │   │   ├── migrations/         # Numbered raw SQL migrations — portable, run automatically
+│   │   │   └── local_dev_bootstrap/ # One-time local Docker Postgres setup, NOT auto-applied
 │   │   ├── routers/
 │   │   │   ├── auth.py
 │   │   │   ├── incidents.py
@@ -174,7 +179,7 @@ incidentops/
 │   │   └── ws_manager.py
 │   ├── scripts/
 │   │   ├── producer.py         # Simulates organic & burst microservice traffic
-│   │   ├── migrate.py          # Applies pending SQL migrations
+│   │   ├── migrate.py          # CLI wrapper to apply migrations without starting the app
 │   │   ├── test_*.py           # Manual integration scripts (see scripts/README.md)
 │   │   └── verify_*.py
 │   └── requirements.txt
@@ -220,8 +225,9 @@ plans (no card required).
    `LLM_API_KEY`, `SLACK_WEBHOOK_URL`. Generate fresh values — don't reuse
    local dev ones. `DATABASE_URL`/`REDIS_URL` are wired automatically from
    the provisioned database/Key Value instance.
-3. Deploy. Then run `python scripts/migrate.py` once, from a Render Shell
-   session on the `incidentops-api` service, to create the schema.
+3. Deploy. No manual migration step needed — the app creates its own schema
+   on startup (Render's free tier has no Shell access to run a script by
+   hand anyway, which is exactly why it works this way; see `app/db/migrator.py`).
 4. Once you have the Vercel frontend's URL, set `CORS_ORIGINS` on the web
    service to it (comma-separated if you need more than one).
 
@@ -229,10 +235,12 @@ Free-tier tradeoffs, all acceptable here since this project's data is
 synthetic demo traffic rather than something that matters if it's reset:
 the web service cold-starts after 15 minutes idle (first request after a
 gap takes 30-60s); the free Postgres instance is deleted after 30+14 days
-unless upgraded (re-run `migrate.py` and restart `scripts/producer.py`
-after recreating it); the free Key Value loses its data on restart, which
-only means losing a few in-flight log entries. Bump any plan in
-`render.yaml` if you want it fully durable instead.
+unless upgraded (re-create it in the Render dashboard and update
+`DATABASE_URL` — the app rebuilds its own schema on the next restart, no
+script to run by hand; then restart `scripts/producer.py` for demo data
+again); the free Key Value loses its data on restart, which only means
+losing a few in-flight log entries. Bump any plan in `render.yaml` if you
+want it fully durable instead.
 
 **Frontend — Vercel:**
 1. Import this repo, set the project's root directory to `frontend/`.
@@ -247,5 +255,5 @@ only means losing a few in-flight log entries. Bump any plan in
 
 1. **User Management**: Currently, the system relies on a single hardcoded admin user (defined in the environment via `ADMIN_EMAIL` and `ADMIN_PASSWORD_HASH`). A full RBAC user management system and database table are needed for production.
 2. **Dockerization**: While PostgreSQL and Redis run in Docker, the FastAPI application and the Python worker currently run natively on the host machine for local development. A unified `docker-compose` setup encompassing the app/worker containers is a logical next step.
-3. **Database Migrations**: `scripts/migrate.py` applies raw SQL files in order and tracks what's run in `schema_migrations` — it isn't a full tool like Alembic (no down-migrations, no autogeneration from model diffs), but it replaces manual DB commands.
+3. **Database Migrations**: `app/db/migrator.py` applies raw SQL files in order and tracks what's run in `schema_migrations` (the app runs it automatically on startup; `scripts/migrate.py` is a CLI wrapper around the same logic for running it without starting the app) — it isn't a full tool like Alembic (no down-migrations, no autogeneration from model diffs), but it replaces manual DB commands.
 4. **Automated Test Suite**: `backend/scripts/test_*.py` are manual, full-stack integration scripts (they boot the API + worker as subprocesses) rather than a CI-friendly `pytest` suite with fixtures/mocks.

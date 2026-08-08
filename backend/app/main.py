@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.db.database import close_db_pool, init_db_pool, get_conn
+from app.db.migrator import apply_pending_migrations
 from app.redis_client import close_redis, init_redis, get_redis
 from app.routers import logs, incidents, auth, ws, settings as settings_router, metrics as metrics_router
 import asyncio
@@ -21,8 +22,14 @@ from app.worker import run as run_worker
 async def lifespan(app: FastAPI):
     # ── Start-up ────────────────────────────────────────────────────────────
     await init_db_pool()
+    # Self-heal the schema on every boot — Render's free web-service tier has
+    # no Shell to run scripts/migrate.py by hand, and its free Postgres plan
+    # gets recreated from scratch periodically. Idempotent, so harmless
+    # elsewhere too.
+    async with get_conn() as conn:
+        await apply_pending_migrations(conn)
     await init_redis()
-    
+
     # Start Redis WebSocket subscriber task
     subscriber_task = asyncio.create_task(redis_subscriber_task())
     # Start periodic dashboard metrics broadcaster
