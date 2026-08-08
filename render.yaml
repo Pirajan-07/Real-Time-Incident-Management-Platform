@@ -5,16 +5,21 @@
 # section for the full walkthrough (env vars to fill in, migration step,
 # connecting the Vercel frontend).
 #
-# Cost note: web + worker on `starter` ($7/mo each) is recommended so the
-# app doesn't cold-start on a visitor; postgres/keyvalue are left on `free`
+# Everything on `free` — no card required. There's no separate worker
+# service: app/worker.py's consumer loop runs in-process inside the API
+# (started from app.main's lifespan), so the whole app fits on one free web
+# service instead of needing a paid worker instance (Render's free tier
+# doesn't offer those at all). The tradeoff: the free web service cold-starts
+# after 15 min idle, the free Postgres is deleted after 30+14 days unless
+# upgraded, and the free Key Value loses its data on restart — all fine here
 # since this project's data is synthetic demo traffic, not something that
-# matters if it's ever reset. Bump their plans below if you want it durable.
+# matters if it's ever reset. Bump any plan below if you want it durable.
 
 services:
   - name: incidentops-api
     type: web
     runtime: python
-    plan: starter
+    plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
@@ -43,34 +48,6 @@ services:
       - key: SLACK_WEBHOOK_URL
         sync: false
       - key: CORS_ORIGINS
-        sync: false
-
-  - name: incidentops-worker
-    type: worker
-    runtime: python
-    plan: starter
-    rootDir: backend
-    buildCommand: pip install -r requirements.txt
-    startCommand: python -m app.worker
-    envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: incidentops-db
-          property: connectionString
-      - key: REDIS_URL
-        fromService:
-          name: incidentops-redis
-          type: keyvalue
-          property: connectionString
-      - key: INGESTION_API_KEY
-        sync: false
-      - key: JWT_SECRET
-        sync: false
-      - key: JWT_ALGORITHM
-        value: HS256
-      - key: LLM_API_KEY
-        sync: false
-      - key: SLACK_WEBHOOK_URL
         sync: false
 
   - name: incidentops-redis

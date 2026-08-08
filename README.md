@@ -191,39 +191,48 @@ incidentops/
 
 The frontend and backend deploy to different kinds of platforms — the
 backend needs a host that supports long-running processes and websockets
-(the worker never exits, and `/ws/dashboard` holds a persistent
-connection), which rules out purely serverless platforms like Vercel for
-it.
+(`/ws/dashboard` holds a persistent connection), which rules out purely
+serverless platforms like Vercel for it.
+
+The log-stream consumer (`app/worker.py`) runs **in-process** as a
+background task started from `app.main`'s lifespan, alongside the existing
+websocket subscriber and metrics broadcaster — not as a separate process.
+That's what lets the whole app fit on a single free-tier web service:
+Render's free tier doesn't offer background worker instances at all, only
+paid ones, so merging the consumer loop into the API process sidesteps
+needing one. `python -m app.worker` still works standalone for local
+debugging (see the module docstring) — just don't run it at the same time
+as the API against the same Redis, since they'd collide as the same
+consumer name.
 
 **Backend — Render:**
 
 `render.yaml` at the repo root is a Render [Blueprint](https://render.com/docs/blueprint-spec) —
-it provisions the API web service, the worker, a Postgres database, and a
-Redis (Key Value) instance in one go, wired together automatically.
+it provisions the API web service, a Postgres database, and a Redis (Key
+Value) instance in one go, wired together automatically, entirely on free
+plans (no card required).
 
 1. In the Render dashboard: **New → Blueprint**, point it at this repo.
-   Render reads `render.yaml` and shows you the four resources it's about
+   Render reads `render.yaml` and shows you the three resources it's about
    to create.
 2. Render will prompt for the env vars marked `sync: false` — fill in
    `INGESTION_API_KEY`, `JWT_SECRET`, `ADMIN_EMAIL`, `ADMIN_PASSWORD_HASH`,
-   `LLM_API_KEY`, `SLACK_WEBHOOK_URL` on **both** the web and worker
-   services. Generate fresh values — don't reuse local dev ones.
-   `DATABASE_URL`/`REDIS_URL` are wired automatically from the provisioned
-   database/Key Value instance.
+   `LLM_API_KEY`, `SLACK_WEBHOOK_URL`. Generate fresh values — don't reuse
+   local dev ones. `DATABASE_URL`/`REDIS_URL` are wired automatically from
+   the provisioned database/Key Value instance.
 3. Deploy. Then run `python scripts/migrate.py` once, from a Render Shell
    session on the `incidentops-api` service, to create the schema.
 4. Once you have the Vercel frontend's URL, set `CORS_ORIGINS` on the web
    service to it (comma-separated if you need more than one).
 
-Cost note: `render.yaml` puts the web service and worker on the `starter`
-plan (~$7/mo each, and workers have no free tier at all) but leaves
-Postgres and Key Value on `free`. That's the cheapest way to keep the app
-itself always-on and responsive. The tradeoff: the free Postgres instance
-is deleted after 30+14 days unless upgraded — fine here since this
-project's data is synthetic demo traffic (re-run `migrate.py` and restart
-`scripts/producer.py` after recreating it), and the free Key Value loses
-its data on restart, which only means losing a few in-flight log entries.
-Bump either plan in `render.yaml` if you want it fully durable instead.
+Free-tier tradeoffs, all acceptable here since this project's data is
+synthetic demo traffic rather than something that matters if it's reset:
+the web service cold-starts after 15 minutes idle (first request after a
+gap takes 30-60s); the free Postgres instance is deleted after 30+14 days
+unless upgraded (re-run `migrate.py` and restart `scripts/producer.py`
+after recreating it); the free Key Value loses its data on restart, which
+only means losing a few in-flight log entries. Bump any plan in
+`render.yaml` if you want it fully durable instead.
 
 **Frontend — Vercel:**
 1. Import this repo, set the project's root directory to `frontend/`.

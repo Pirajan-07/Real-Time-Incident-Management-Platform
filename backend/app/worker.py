@@ -5,9 +5,19 @@ Reads from the "logs" Redis stream via consumer group "incident-workers",
 maintains a 60-second rolling window of metrics per source, evaluates three
 anomaly-detection rules, and upserts incidents into Postgres.
 
-Run from the backend/ directory (venv active):
+run() is started as an in-process background task from app.main's lifespan
+(alongside redis_subscriber_task/metrics_broadcaster_task) — that's how it
+runs in production, so the whole app fits on a single free-tier web service
+with no separate paid worker instance needed. It assumes init_redis()/
+init_db_pool() have already been called by whoever starts it, and does not
+own their shutdown.
+
+It can still be run as a standalone process for local dev/debugging:
 
     python -m app.worker
+
+Don't run both at once against the same Redis — they'd share the consumer
+name "worker-1" and fight over the same messages.
 
 Detection rules (evaluated on every rolling-window update):
   1. error_rate_spike  – error % in 60s window > 10%  AND  total >= 20
@@ -27,7 +37,9 @@ import asyncpg
 import redis.asyncio as aioredis
 
 from app.config import settings
+from app.db.database import close_db_pool, get_conn, init_db_pool
 from app.llm import generate_incident_summary
+from app.redis_client import close_redis, get_redis, init_redis
 from app.slack import send_slack_alert
 from app.ws_manager import publish_message
 
@@ -566,15 +578,11 @@ async def _process_batch(
 # ---------------------------------------------------------------------------
 
 async def run() -> None:
+    """Consume loop. Assumes init_redis()/init_db_pool() were already called
+    by the caller — does not create or close either connection itself."""
     log.info("Starting IncidentOps consumer worker…")
 
-    redis = aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
-    await redis.ping()
-    log.info("Connected to Redis at %s", REDIS_URL)
-
-    from app.db.database import init_db_pool, get_conn, close_db_pool
-    await init_db_pool()
-    log.info("Connected to Postgres at %s", DATABASE_URL)
+    redis = get_redis()
 
     await _ensure_consumer_group(redis)
 
@@ -639,16 +647,26 @@ async def run() -> None:
 
     except asyncio.CancelledError:
         log.info("Consume loop cancelled.")
+
+
+# ---------------------------------------------------------------------------
+# Standalone entry point (local dev only — see module docstring) + shutdown
+# ---------------------------------------------------------------------------
+
+async def _run_standalone() -> None:
+    """Owns the connection lifecycle that app.main's lifespan owns instead
+    when run() is started in-process."""
+    await init_redis()
+    await init_db_pool()
+    log.info("Connected to Redis at %s and Postgres at %s", REDIS_URL, DATABASE_URL)
+    try:
+        await run()
     finally:
         log.info("Shutting down – closing connections…")
-        await redis.aclose()
+        await close_redis()
         await close_db_pool()
         log.info("Worker stopped cleanly.")
 
-
-# ---------------------------------------------------------------------------
-# Entry point + graceful shutdown
-# ---------------------------------------------------------------------------
 
 def _handle_signal(loop: asyncio.AbstractEventLoop) -> None:
     log.info("Shutdown signal received.")
@@ -667,7 +685,7 @@ def main() -> None:
             pass  # Windows SIGTERM
 
     try:
-        loop.run_until_complete(run())
+        loop.run_until_complete(_run_standalone())
     except (KeyboardInterrupt, asyncio.CancelledError):
         pass
     finally:

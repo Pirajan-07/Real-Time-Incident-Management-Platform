@@ -10,6 +10,7 @@ from app.routers import logs, incidents, auth, ws, settings as settings_router, 
 import asyncio
 from app.ws_manager import redis_subscriber_task
 from app.metrics import metrics_broadcaster_task
+from app.worker import run as run_worker
 
 
 # ---------------------------------------------------------------------------
@@ -26,10 +27,15 @@ async def lifespan(app: FastAPI):
     subscriber_task = asyncio.create_task(redis_subscriber_task())
     # Start periodic dashboard metrics broadcaster
     metrics_task = asyncio.create_task(metrics_broadcaster_task())
+    # Start the log-stream consumer worker in-process — see app/worker.py's
+    # module docstring for why (fits on one free-tier web service, no
+    # separate paid worker instance needed).
+    worker_task = asyncio.create_task(run_worker())
     yield
     # ── Shut-down ───────────────────────────────────────────────────────────
     subscriber_task.cancel()
     metrics_task.cancel()
+    worker_task.cancel()
     await close_db_pool()
     await close_redis()
 
