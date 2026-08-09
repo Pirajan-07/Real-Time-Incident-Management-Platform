@@ -179,6 +179,34 @@ thresholds = Thresholds()
 # Rate limit state for LLM calls (timestamps)
 llm_call_times: deque[float] = deque()
 
+# asyncio.create_task() only holds a *weak* reference to the task it returns —
+# a fire-and-forget task with no other reference can be garbage-collected
+# mid-flight, silently, with no error. This bit us for real: the AI root-cause
+# summary (a ~15s network call — the longest-lived fire-and-forget task here,
+# and so the most exposed to this) never showed up on a live incident, while
+# a direct call to the same Groq endpoint/key worked fine in isolation.
+# _spawn() is the fix the asyncio docs themselves recommend: keep a strong
+# reference in a module-level set until the task finishes, and log — instead
+# of silently swallowing — any exception it raises.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn(coro) -> asyncio.Task:
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_on_background_task_done)
+    return task
+
+
+def _on_background_task_done(task: asyncio.Task) -> None:
+    _background_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        log.error("Background task failed: %s", exc, exc_info=exc)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -316,7 +344,7 @@ async def _trigger_ai_summary(pg_conn: asyncpg.Connection, incident_id: int, sou
     related_logs = [dict(r) for r in rows]
     
     # Fire and forget
-    asyncio.create_task(
+    _spawn(
         generate_incident_summary(
             incident_id=incident_id,
             source=source,
@@ -372,7 +400,7 @@ async def _upsert_incident(
             f"(was {existing['metric_value']})",
             flush=True,
         )
-        asyncio.create_task(publish_message(redis_client, "incident_updated", {
+        _spawn(publish_message(redis_client, "incident_updated", {
             "id": existing["id"],
             "metric_value": rule["metric_value"],
             "last_log_id": rule["last_log_id"]
@@ -399,7 +427,7 @@ async def _upsert_incident(
             flush=True,
         )
         
-        asyncio.create_task(publish_message(redis_client, "incident_created", {
+        _spawn(publish_message(redis_client, "incident_created", {
             "id": row["id"],
             "title": rule["title"],
             "source": source,
@@ -414,7 +442,7 @@ async def _upsert_incident(
         await _trigger_ai_summary(pg_conn, row["id"], source, rule)
         
         # Fire and forget Slack alert
-        asyncio.create_task(
+        _spawn(
             send_slack_alert(
                 incident_id=row["id"],
                 title=rule["title"],
@@ -540,7 +568,7 @@ async def _process_batch(
 
         event = LogEvent(log_id=log_id, ts=ts, level=level, rt_ms=rt_ms)
         
-        asyncio.create_task(publish_message(redis, "log", {
+        _spawn(publish_message(redis, "log", {
             "source": source,
             "level": level,
             "message": entry.get("message", ""),
