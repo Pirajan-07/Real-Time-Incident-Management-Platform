@@ -1,27 +1,107 @@
 import { useNavigate } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../AuthContext';
+
+// Errors that indicate the backend is cold-starting (Render free tier).
+// In these cases we auto-retry with a countdown instead of showing a hard error.
+const isColdStartError = (msg) => {
+  if (!msg) return false;
+  const m = msg.toLowerCase();
+  return (
+    m.includes('failed to fetch') ||
+    m.includes('networkerror') ||
+    m.includes('not found') ||        // Render splash returns 404 for API paths
+    m.includes('load failed') ||
+    m.includes('err_connection_reset')
+  );
+};
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  // warmingUp = true while we're auto-retrying a cold-start failure
+  const [warmingUp, setWarmingUp] = useState(false);
+  const [retryCountdown, setRetryCountdown] = useState(0);
   const navigate = useNavigate();
   const { login } = useAuth();
+  const retryRef = useRef(null); // holds { timer, credentials, attempt }
+
+  // Clean up any pending retry timers on unmount.
+  useEffect(() => () => {
+    if (retryRef.current?.timer) clearInterval(retryRef.current.timer);
+  }, []);
+
+  const attemptLogin = async (emailVal, passwordVal) => {
+    try {
+      await login(emailVal, passwordVal);
+      navigate('/dashboard');
+      return true;
+    } catch (err) {
+      return { err };
+    }
+  };
+
+  const scheduleRetry = (emailVal, passwordVal, attempt) => {
+    // Backoff: 15s, 20s, 25s … capped at 40s. Max 6 auto-retries then give up.
+    const MAX_AUTO_RETRIES = 6;
+    if (attempt > MAX_AUTO_RETRIES) {
+      setWarmingUp(false);
+      setLoading(false);
+      setError('Backend is taking longer than expected to start. Please wait a moment and try again manually.');
+      return;
+    }
+    const wait = Math.min(15 + (attempt - 1) * 5, 40);
+    setRetryCountdown(wait);
+
+    let remaining = wait;
+    const iv = setInterval(() => {
+      remaining -= 1;
+      setRetryCountdown(remaining);
+      if (remaining <= 0) {
+        clearInterval(iv);
+        retryRef.current = null;
+        // Retry the login
+        attemptLogin(emailVal, passwordVal).then((result) => {
+          if (result === true) return; // success — navigation already happened
+          const { err } = result;
+          if (isColdStartError(err?.message)) {
+            scheduleRetry(emailVal, passwordVal, attempt + 1);
+          } else {
+            setWarmingUp(false);
+            setLoading(false);
+            setError(err?.message || 'Login failed');
+          }
+        });
+      }
+    }, 1000);
+    retryRef.current = { timer: iv };
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
-    try {
-      await login(email, password);
-      navigate('/dashboard');
-    } catch (err) {
-      setError(err.message || 'Login failed');
-    } finally {
+    setWarmingUp(false);
+    const result = await attemptLogin(email, password);
+    if (result === true) return; // navigated away
+    const { err } = result;
+    if (isColdStartError(err?.message)) {
+      setWarmingUp(true);
+      scheduleRetry(email, password, 1);
+    } else {
+      setError(err?.message || 'Login failed');
       setLoading(false);
     }
+  };
+
+  const cancelRetry = () => {
+    if (retryRef.current?.timer) clearInterval(retryRef.current.timer);
+    retryRef.current = null;
+    setWarmingUp(false);
+    setLoading(false);
+    setRetryCountdown(0);
   };
 
   return (
@@ -102,7 +182,26 @@ export default function LoginPage() {
               border: '1px solid rgba(195,200,193,0.3)',
             }}
           >
-            {error && (
+            {/* Status / Error messages */}
+            {warmingUp && (
+              <div style={{ background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)', color: '#92400e', padding: '12px 14px', borderRadius: 8, fontSize: 13 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, marginBottom: 4 }}>
+                  <span style={{ fontSize: 16 }}>☕</span>
+                  Backend is waking up (Render cold start)…
+                </div>
+                <div style={{ opacity: 0.8 }}>
+                  Retrying automatically in <strong>{retryCountdown}s</strong>. This usually takes 30–60 seconds.
+                </div>
+                <button
+                  type="button"
+                  onClick={cancelRetry}
+                  style={{ marginTop: 8, background: 'none', border: 'none', color: '#92400e', textDecoration: 'underline', cursor: 'pointer', fontSize: 12, padding: 0 }}
+                >
+                  Cancel and try manually
+                </button>
+              </div>
+            )}
+            {error && !warmingUp && (
               <div style={{ background: '#FBEAE9', color: '#901201', padding: '12px', borderRadius: 8, fontSize: 14 }}>
                 {error}
               </div>
@@ -139,14 +238,14 @@ export default function LoginPage() {
               />
             </div>
             {/* Submit */}
-            <button type="submit" disabled={loading} style={{
-              width: '100%', background: loading ? '#434843' : '#1b3022', color: '#fff', fontWeight: 600,
+            <button type="submit" disabled={loading || warmingUp} style={{
+              width: '100%', background: (loading || warmingUp) ? '#434843' : '#1b3022', color: '#fff', fontWeight: 600,
               fontSize: 14, letterSpacing: '0.02em', borderRadius: 8, padding: '16px',
-              border: 'none', cursor: loading ? 'not-allowed' : 'pointer', display: 'flex', justifyContent: 'center',
+              border: 'none', cursor: (loading || warmingUp) ? 'not-allowed' : 'pointer', display: 'flex', justifyContent: 'center',
               alignItems: 'center', gap: 8, fontFamily: 'Manrope',
               transition: 'background 0.2s',
             }}>
-              {loading ? 'Logging in...' : 'Log In'}
+              {warmingUp ? `Waking up backend… (${retryCountdown}s)` : loading ? 'Logging in...' : 'Log In'}
               <span className="material-symbols-outlined" style={{ fontSize: 18, opacity: 0.7 }}>arrow_forward</span>
             </button>
           </form>

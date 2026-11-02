@@ -92,15 +92,19 @@ export const api = {
 
   connectWebSocket: (token, onMessage) => {
     // Returns a controller { close() } that stops reconnection cleanly.
-    // Reconnects with exponential backoff (1 s → 2 s → … → 15 s cap) on
+    // Reconnects with exponential backoff (5 s -> 10 s -> ... -> 60 s cap) on
     // any close or error. Stops immediately when close() is called (e.g.
-    // Dashboard unmount or logout — no token guard prevents zombie loops).
-    const MIN_DELAY = 1000;
-    const MAX_DELAY = 15000;
+    // Dashboard unmount or logout -- no token guard prevents zombie loops).
+    // MAX_RETRIES prevents hammering a cold-starting backend (e.g. Render
+    // free tier) into a restart loop; the user can reload once the backend is up.
+    const MIN_DELAY = 5000;
+    const MAX_DELAY = 60000;
+    const MAX_RETRIES = 8;
     let delay = MIN_DELAY;
     let ws = null;
     let stopped = false;
     let retryTimer = null;
+    let retries = 0;
 
     function connect() {
       if (stopped || !token) return;
@@ -110,6 +114,7 @@ export const api = {
       ws.onopen = () => {
         console.log('[WS] Connected to dashboard');
         delay = MIN_DELAY; // reset backoff after a successful handshake
+        retries = 0;
       };
 
       ws.onmessage = (event) => {
@@ -121,15 +126,24 @@ export const api = {
       };
 
       ws.onerror = (err) => {
-        // onerror always fires before onclose — log here, retry in onclose
+        // onerror always fires before onclose -- log here, retry in onclose
         console.warn('[WS] Socket error:', err);
       };
 
       ws.onclose = (event) => {
-        if (stopped) return; // intentional .close() call — do not retry
+        if (stopped) return; // intentional .close() call -- do not retry
+        retries += 1;
+        if (retries > MAX_RETRIES) {
+          console.warn(
+            `[WS] Giving up after ${MAX_RETRIES} retries. ` +
+            'Backend may still be cold-starting -- reload the page once it is up.'
+          );
+          onMessage({ type: '_ws_gave_up' });
+          return;
+        }
         console.warn(
           `[WS] Disconnected (code=${event.code}, reason="${event.reason}"). ` +
-          `Retrying in ${delay / 1000}s…`
+          `Retry ${retries}/${MAX_RETRIES} in ${delay / 1000}s...`
         );
         retryTimer = setTimeout(() => {
           delay = Math.min(delay * 2, MAX_DELAY);

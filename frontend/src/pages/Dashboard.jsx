@@ -90,6 +90,7 @@ export default function Dashboard() {
   const [incidents, setIncidents] = useState([]);
   const [logs, setLogs] = useState([]);
   const [expandedPanel, setExpandedPanel] = useState(null); // null | 'logs' | 'incidents'
+  const [wsGaveUp, setWsGaveUp] = useState(false);
 
   // Real bucketed error-rate/latency history — fetched once, then kept live
   // via the 'metrics_update' websocket push (see app/metrics.py on the backend).
@@ -188,7 +189,10 @@ export default function Dashboard() {
     fetchData();
 
     ws = api.connectWebSocket(token, (msg) => {
-      if (msg.type === 'log') {
+      if (msg.type === '_ws_gave_up') {
+        setWsGaveUp(true);
+        return;
+      } else if (msg.type === 'log') {
         // Keep the live log table (capped at 100 rows for display)
         setLogs(prev => [msg.data, ...prev].slice(0, 100));
         // Bug 2 fix: increment the authoritative counter by 1.
@@ -360,6 +364,24 @@ export default function Dashboard() {
             </div>
           </div>
         </header>
+
+        {/* Cold-start warning banner */}
+        {wsGaveUp && (
+          <div style={{
+            background: 'rgba(245,158,11,0.12)', borderBottom: '1px solid rgba(245,158,11,0.3)',
+            color: '#F59E0B', fontSize: 13, fontWeight: 600,
+            padding: '8px 24px', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0,
+          }}>
+            <span className="material-symbols-outlined" style={{ fontSize: 18 }}>wifi_off</span>
+            Live connection lost — backend may be cold-starting. Showing last known data.&nbsp;
+            <button
+              onClick={() => window.location.reload()}
+              style={{ background: 'none', border: '1px solid rgba(245,158,11,0.5)', borderRadius: 6, color: '#F59E0B', fontSize: 12, fontWeight: 700, padding: '2px 10px', cursor: 'pointer' }}
+            >
+              Reload
+            </button>
+          </div>
+        )}
 
         {/* Board — grid rows are fr-based so everything fits the viewport with no scrolling, at any zoom level */}
         <main style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: 16, display: 'grid', gridTemplateRows: 'auto minmax(0,1.8fr) minmax(150px,0.85fr)', gap: 14 }}>
