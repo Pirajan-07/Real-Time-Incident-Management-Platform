@@ -1,16 +1,16 @@
 import { useNavigate } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../AuthContext';
+import { waitForBackend } from '../api';
 
-// Errors that indicate the backend is cold-starting (Render free tier).
-// In these cases we auto-retry with a countdown instead of showing a hard error.
+// Errors that indicate the backend is unreachable (cold-start or down).
 const isColdStartError = (msg) => {
   if (!msg) return false;
   const m = msg.toLowerCase();
   return (
     m.includes('failed to fetch') ||
     m.includes('networkerror') ||
-    m.includes('not found') ||        // Render splash returns 404 for API paths
+    m.includes('not found') ||
     m.includes('load failed') ||
     m.includes('err_connection_reset')
   );
@@ -21,84 +21,54 @@ export default function LoginPage() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  // warmingUp = true while we're auto-retrying a cold-start failure
   const [warmingUp, setWarmingUp] = useState(false);
   const [retryCountdown, setRetryCountdown] = useState(0);
   const navigate = useNavigate();
   const { login } = useAuth();
-  const retryRef = useRef(null); // holds { timer, credentials, attempt }
+  const abortRef = useRef(false);
 
-  // Clean up any pending retry timers on unmount.
-  useEffect(() => () => {
-    if (retryRef.current?.timer) clearInterval(retryRef.current.timer);
-  }, []);
-
-  const attemptLogin = async (emailVal, passwordVal) => {
-    try {
-      await login(emailVal, passwordVal);
-      navigate('/dashboard');
-      return true;
-    } catch (err) {
-      return { err };
-    }
-  };
-
-  const scheduleRetry = (emailVal, passwordVal, attempt) => {
-    // Backoff: 15s, 20s, 25s … capped at 40s. Max 6 auto-retries then give up.
-    const MAX_AUTO_RETRIES = 6;
-    if (attempt > MAX_AUTO_RETRIES) {
-      setWarmingUp(false);
-      setLoading(false);
-      setError('Backend is taking longer than expected to start. Please wait a moment and try again manually.');
-      return;
-    }
-    const wait = Math.min(15 + (attempt - 1) * 5, 40);
-    setRetryCountdown(wait);
-
-    let remaining = wait;
-    const iv = setInterval(() => {
-      remaining -= 1;
-      setRetryCountdown(remaining);
-      if (remaining <= 0) {
-        clearInterval(iv);
-        retryRef.current = null;
-        // Retry the login
-        attemptLogin(emailVal, passwordVal).then((result) => {
-          if (result === true) return; // success — navigation already happened
-          const { err } = result;
-          if (isColdStartError(err?.message)) {
-            scheduleRetry(emailVal, passwordVal, attempt + 1);
-          } else {
-            setWarmingUp(false);
-            setLoading(false);
-            setError(err?.message || 'Login failed');
-          }
-        });
-      }
-    }, 1000);
-    retryRef.current = { timer: iv };
-  };
+  useEffect(() => () => { abortRef.current = true; }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
     setWarmingUp(false);
-    const result = await attemptLogin(email, password);
-    if (result === true) return; // navigated away
-    const { err } = result;
-    if (isColdStartError(err?.message)) {
-      setWarmingUp(true);
-      scheduleRetry(email, password, 1);
-    } else {
-      setError(err?.message || 'Login failed');
-      setLoading(false);
+    abortRef.current = false;
+
+    try {
+      await login(email, password);
+      navigate('/dashboard');
+    } catch (err) {
+      if (isColdStartError(err?.message)) {
+        // Poll /health (simple GET, no CORS preflight) until backend is up,
+        // then attempt login once — avoids hammering Render during cold start.
+        setWarmingUp(true);
+        try {
+          await waitForBackend({
+            pollInterval: 10000,
+            maxAttempts: 18, // ~3 minutes total
+            onTick: (s) => { if (!abortRef.current) setRetryCountdown(s); },
+          });
+          if (abortRef.current) return;
+          setWarmingUp(false);
+          await login(email, password);
+          navigate('/dashboard');
+        } catch {
+          if (!abortRef.current)
+            setError('Backend is taking too long to start. Please try again in a minute.');
+        } finally {
+          if (!abortRef.current) setLoading(false);
+        }
+      } else {
+        setError(err?.message || 'Login failed');
+        setLoading(false);
+      }
     }
   };
 
   const cancelRetry = () => {
-    if (retryRef.current?.timer) clearInterval(retryRef.current.timer);
-    retryRef.current = null;
+    abortRef.current = true;
     setWarmingUp(false);
     setLoading(false);
     setRetryCountdown(0);
